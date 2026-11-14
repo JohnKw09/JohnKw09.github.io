@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, FormEvent, ReactNode } from 'react';
 import {
   ArrowLeft, ArrowRight, Bell, BookOpen, BriefcaseBusiness, CalendarDays,
@@ -7,12 +7,23 @@ import {
   Trash2, Trophy, X, Zap, ChartNoAxesColumnIncreasing, CalendarPlus, Play, Pause,
   RotateCcw, SlidersHorizontal, Heart, Tag, Timer, CircleHelp,
 } from 'lucide-react';
-import { CATEGORIES, dateKey, makeId, readData, writeData } from './storage';
-import type { AppView, Category, DayEvent, PlannerData, Priority, Task } from './types';
+import { AVATAR_IDS, CATEGORIES, dateKey, makeId, readData, writeData } from './storage';
+import type { AppView, AvatarId, Category, DayEvent, PlannerData, Priority, Task, UserSettings } from './types';
 
 const todayKey = dateKey(new Date());
 const weekdays = ['Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'So', 'Nd'];
 const priorityLabel: Record<Priority, string> = { high: 'Wysoki', medium: 'Średni', low: 'Niski' };
+const avatarSymbols: Record<Exclude<AvatarId, 'initial'>, string> = {
+  flower: '🌼', sun: '☀️', moon: '🌙', leaf: '🌿', butterfly: '🦋', sparkles: '✨',
+};
+const avatarLabels: Record<AvatarId, string> = {
+  initial: 'Inicjał', flower: 'Kwiat', sun: 'Słońce', moon: 'Księżyc', leaf: 'Liść', butterfly: 'Motyl', sparkles: 'Iskry',
+};
+
+function avatarContent(settings: UserSettings): string {
+  const avatar = AVATAR_IDS.includes(settings.avatar as AvatarId) ? settings.avatar as AvatarId : 'initial';
+  return avatar === 'initial' ? (settings.name.trim().charAt(0).toLocaleUpperCase('pl') || 'A') : avatarSymbols[avatar];
+}
 
 function localDate(value: string): Date {
   const [year, month, day] = value.split('-').map(Number);
@@ -50,13 +61,17 @@ function categoryIcon(category: Category) {
 
 function App() {
   const [data, setData] = useState<PlannerData>(() => readData());
-  const [selectedDate, setSelectedDate] = useState(todayKey);
-  const [month, setMonth] = useState(() => new Date());
+  const [selectedDate, setSelectedDate] = useState(() => data.selectedDate || todayKey);
+  const [month, setMonth] = useState(() => localDate(data.selectedDate || todayKey));
   const [view, setView] = useState<AppView>('home');
-  const [filter, setFilter] = useState('today');
+  const [filter, setFilter] = useState(() => data.selectedDate && data.selectedDate !== todayKey ? 'date' : 'today');
   const [taskStatus, setTaskStatus] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [priorityFilter, setPriorityFilter] = useState('all');
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>(() => data.notes);
+  const [noteSaveStatus, setNoteSaveStatus] = useState<Record<string, 'saving' | 'saved'>>({});
+  const noteTimers = useRef(new Map<string, number>());
+  const noteDraftRef = useRef<Record<string, string>>(data.notes);
   const [query, setQuery] = useState('');
   const [modal, setModal] = useState<'task' | 'event' | 'focus' | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -67,6 +82,9 @@ function App() {
   const [focusStarted, setFocusStarted] = useState<number | null>(null);
 
   useEffect(() => writeData(data), [data]);
+  useEffect(() => {
+    setData((previous) => previous.selectedDate === selectedDate ? previous : { ...previous, selectedDate });
+  }, [selectedDate]);
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(''), 2500);
@@ -114,6 +132,26 @@ function App() {
 
   function updateData(updater: (previous: PlannerData) => PlannerData) {
     setData((previous) => updater(previous));
+  }
+
+  function saveNoteDraft(date: string, value: string) {
+    noteDraftRef.current = { ...noteDraftRef.current, [date]: value };
+    setNoteDrafts((previous) => ({ ...previous, [date]: value }));
+    setNoteSaveStatus((previous) => ({ ...previous, [date]: 'saving' }));
+    const pending = noteTimers.current.get(date);
+    if (pending) window.clearTimeout(pending);
+    const timer = window.setTimeout(() => {
+      const note = noteDraftRef.current[date] ?? '';
+      const savedAt = new Date().toISOString();
+      setData((previous) => ({
+        ...previous,
+        notes: { ...previous.notes, [date]: note },
+        noteSavedAt: { ...previous.noteSavedAt, [date]: savedAt },
+      }));
+      setNoteSaveStatus((previous) => ({ ...previous, [date]: 'saved' }));
+      noteTimers.current.delete(date);
+    }, 600);
+    noteTimers.current.set(date, timer);
   }
 
   function toggleTask(task: Task) {
@@ -221,7 +259,7 @@ function App() {
             <div className="topbar-tools">
               <label className="search-box"><Search size={19} /><input value={query} onChange={(event) => { setQuery(event.target.value); setView('home'); }} placeholder="Szukaj zadań…" aria-label="Szukaj zadań" />{query && <button onClick={() => setQuery('')} aria-label="Wyczyść wyszukiwanie"><X size={15} /></button>}</label>
               <button className="icon-button notification-button" aria-label="Powiadomienia" onClick={() => setToast(todayTasks.filter((task) => !task.done).length ? `Masz ${todayTasks.filter((task) => !task.done).length} zadań do zrobienia dziś` : 'Wszystko gotowe na dziś!')}><Bell size={19} /><span /></button>
-              <button className="profile-button" aria-label="Ustawienia profilu" onClick={() => setView('settings')}>{data.settings.name.trim().charAt(0).toLocaleUpperCase('pl')}</button>
+              <button className="profile-button" data-avatar={data.settings.avatar} aria-label="Ustawienia profilu" onClick={() => setView('settings')}>{avatarContent(data.settings)}</button>
             </div>
           </header>
 
@@ -257,7 +295,7 @@ function App() {
                 <div className="inspiration-card"><div className="mountain-art"><div className="sunset-sun" /><div className="mountain mountain-back" /><div className="mountain mountain-front" /><div className="mountain mountain-dark" /></div><div className="inspiration-copy"><span>Małe kroki</span><span>prowadzą do wielkich zmian <Heart size={15} fill="currentColor" /></span></div><button onClick={() => setToast('Każdy dobry dzień zaczyna się od małego kroku ✨')}>Zainspiruj się <ArrowRight size={15} /></button></div>
               </section>
 
-              <section className="bottom-agenda"><div className="panel agenda-panel"><div className="panel-heading"><h2><Clock3 size={17} className="icon-violet" /> Najbliższe</h2><button className="subtle-link" onClick={() => setView('calendar')}>Kalendarz <ArrowRight size={14} /></button></div><Upcoming tasks={dayTasks} events={data.events.filter((event) => event.date === selectedDate)} /></div><div className="panel note-panel"><div className="panel-heading"><h2><Pencil size={16} className="icon-violet" /> Notatka dnia</h2><span className="autosave-label">zapisuje się automatycznie</span></div><textarea aria-label="Notatka dnia" placeholder="Zapisz myśl, cel albo coś, o czym chcesz pamiętać…" value={data.notes[selectedDate] ?? ''} onChange={(event) => updateData((previous) => ({ ...previous, notes: { ...previous.notes, [selectedDate]: event.target.value } }))} /></div></section>
+              <section className="bottom-agenda"><div className="panel agenda-panel"><div className="panel-heading"><h2><Clock3 size={17} className="icon-violet" /> Najbliższe</h2><button className="subtle-link" onClick={() => setView('calendar')}>Kalendarz <ArrowRight size={14} /></button></div><Upcoming tasks={dayTasks} events={data.events.filter((event) => event.date === selectedDate)} /></div><div className="panel note-panel"><div className="panel-heading"><h2><Pencil size={16} className="icon-violet" /> Notatka dnia</h2><span className={`autosave-label ${noteSaveStatus[selectedDate] ?? (data.noteSavedAt[selectedDate] ? 'saved' : 'idle')}`} aria-live="polite">{noteSaveStatus[selectedDate] === 'saving' ? 'Zapisuję…' : data.noteSavedAt[selectedDate] ? <>Zapisano · {new Intl.DateTimeFormat('pl-PL', { hour: '2-digit', minute: '2-digit' }).format(new Date(data.noteSavedAt[selectedDate]))} <Check size={11} /></> : 'zapisuje się automatycznie'}</span></div><textarea aria-label="Notatka dnia" placeholder="Zapisz myśl, cel albo coś, o czym chcesz pamiętać…" value={noteDrafts[selectedDate] ?? data.notes[selectedDate] ?? ''} onChange={(event) => saveNoteDraft(selectedDate, event.target.value)} /></div></section>
             </>}
 
             {view === 'calendar' && <section className="inner-page"><PageTitle eyebrow="Zaplanuj z wyprzedzeniem" title="Kalendarz" description="Wybierz dzień, dodaj zadania i miej swój plan pod ręką." action={<button className="primary-button" onClick={() => setModal('event')}><Plus size={17} /> Dodaj wydarzenie</button>} /><CalendarPanel month={month} selectedDate={selectedDate} tasks={data.tasks} events={data.events} onMonth={changeMonth} onSelect={selectCalendarDate} onAddEvent={() => setModal('event')} /><div className="panel calendar-agenda"><div className="panel-heading"><h2>{formatDate(selectedDate)}</h2><button className="primary-button compact-button" onClick={() => openTask()}><Plus size={16} /> Dodaj zadanie</button></div><AgendaForDate tasks={data.tasks.filter((task) => task.date === selectedDate)} events={data.events.filter((event) => event.date === selectedDate)} onToggle={toggleTask} /></div></section>}
@@ -315,7 +353,7 @@ function Sidebar({ view, setView, selectedDate, chooseDate, month, changeMonth, 
       {([['all', 'Wszystkie'], ['today', 'Dziś'], ['important', 'Ważne'], ['private', 'Prywatne']] as const).map(([id, label]) => <button key={id} className={filter === id && view === 'home' ? 'filter-active' : ''} onClick={() => { onFilter(id); setView('home'); }}><span className={`filter-dot ${id}`} />{label}<b className={`filter-count ${id}`}>{counts[id]}</b></button>)}
     </div>
     <div className="sidebar-calendar"><div className="sidebar-section-title"><span>Kalendarz</span><div className="calendar-arrows"><button aria-label="Poprzedni miesiąc" onClick={() => changeMonth(-1)}><ArrowLeft size={14} /></button><button aria-label="Następny miesiąc" onClick={() => changeMonth(1)}><ArrowRight size={14} /></button></div></div><MiniCalendar month={month} selectedDate={selectedDate} tasks={tasks} onSelect={chooseDate} /></div>
-    <div className="sidebar-bottom"><div className="plant-art" aria-hidden="true"><i /><i /><i /><i /><span /></div><div className="sidebar-greeting">Małe kroki,<br />wielkie rzeczy <Heart size={14} /></div><div className="sidebar-profile"><div className="avatar">{settings.name.trim().charAt(0).toLocaleUpperCase('pl')}</div><div><strong>{settings.name}</strong><span><Sparkles size={12} /> {streak ? `${streak} dni z rzędu` : 'Dobrego dnia!'}</span></div><ChevronDown size={16} className="profile-chevron" /></div></div>
+    <div className="sidebar-bottom"><div className="plant-art" aria-hidden="true"><i /><i /><i /><i /><span /></div><div className="sidebar-greeting">Małe kroki,<br />wielkie rzeczy <Heart size={14} /></div><div className="sidebar-profile"><div className="avatar" data-avatar={settings.avatar}>{avatarContent(settings)}</div><div><strong>{settings.name}</strong><span><Sparkles size={12} /> {streak ? `${streak} dni z rzędu` : 'Dobrego dnia!'}</span></div><ChevronDown size={16} className="profile-chevron" /></div></div>
   </aside>;
 }
 
@@ -356,12 +394,21 @@ function CalendarPanel({ month, selectedDate, tasks, events, onMonth, onSelect, 
 
 function TaskRow({ task, onToggle, onEdit, onDelete }: { task: Task; onToggle: () => void; onEdit: () => void; onDelete: () => void }) {
   const [menu, setMenu] = useState(false);
-  return <article className={`task-row ${task.done ? 'task-done' : ''}`}>
-    <button className={`task-check ${task.done ? 'checked' : ''}`} onClick={onToggle} aria-label={task.done ? 'Oznacz jako niewykonane' : 'Oznacz jako wykonane'}>{task.done && <Check size={14} strokeWidth={3} />}</button>
-    <div className="task-main"><button className="task-title" onClick={onEdit}>{task.title}</button>{task.description && <span className="task-description">{task.description}</span>}<div className="task-meta"><span><Clock3 size={12} />{task.time || 'Bez godziny'}</span><span className={`category-chip cat-${task.category.toLowerCase().replace('ł', 'l').replace('ó', 'o').replace('ś', 's')}`}>{categoryIcon(task.category)}{task.category}</span></div></div>
+  return <article className={`task-row ${task.done ? 'task-done' : ''} ${menu ? 'menu-open' : ''}`}>
+    <button className={`task-check ${task.done ? 'checked' : ''}`} onClick={(event) => { event.stopPropagation(); onToggle(); }} aria-label={task.done ? 'Oznacz jako niewykonane' : 'Oznacz jako wykonane'}>{task.done && <Check size={14} strokeWidth={3} />}</button>
+    <div className="task-main"><button className="task-title" onClick={(event) => { event.stopPropagation(); onEdit(); }}>{task.title}</button>{task.description && <span className="task-description">{task.description}</span>}<div className="task-meta"><span><Clock3 size={12} />{task.time || 'Bez godziny'}</span><span className={`category-chip cat-${task.category.toLowerCase().replace('ł', 'l').replace('ó', 'o').replace('ś', 's')}`}>{categoryIcon(task.category)}{task.category}</span></div></div>
     <span className={`priority-pill priority-${task.priority}`}><i />{priorityLabel[task.priority]}</span>
     <span className="task-time">{task.time || '—'}</span>
-    <div className="task-menu-wrap"><button className="row-menu-button" aria-label={`Opcje: ${task.title}`} onClick={() => setMenu((value) => !value)}><MoreVertical size={17} /></button>{menu && <><button className="menu-dismiss" aria-label="Zamknij menu" onClick={() => setMenu(false)} /><div className="row-menu"><button onClick={() => { setMenu(false); onEdit(); }}><Pencil size={14} /> Edytuj</button><button className="danger-action" onClick={() => { setMenu(false); onDelete(); }}><Trash2 size={14} /> Usuń</button></div></>}</div>
+    <div className={`task-menu-wrap ${menu ? 'menu-open' : ''}`}>
+      <button className="row-menu-button" aria-label={`Opcje: ${task.title}`} aria-haspopup="menu" aria-expanded={menu} onClick={(event) => { event.stopPropagation(); setMenu((value) => !value); }}><MoreVertical size={17} /></button>
+      {menu && <>
+        <button className="menu-dismiss" aria-label="Zamknij menu" onClick={(event) => { event.stopPropagation(); setMenu(false); }} />
+        <div className="row-menu" role="menu">
+          <button role="menuitem" onClick={(event) => { event.stopPropagation(); setMenu(false); onEdit(); }}><Pencil size={14} /> Edytuj</button>
+          <button role="menuitem" className="danger-action" onClick={(event) => { event.stopPropagation(); setMenu(false); onDelete(); }}><Trash2 size={14} /> Usuń</button>
+        </div>
+      </>}
+    </div>
   </article>;
 }
 
@@ -404,7 +451,8 @@ function StatisticsPage({ tasks, focusSessions }: { tasks: Task[]; focusSessions
 }
 
 function SettingsPage({ settings, onSave }: { settings: PlannerData['settings']; onSave: (settings: PlannerData['settings']) => void }) {
-  return <section className="inner-page"><PageTitle eyebrow="Dostosuj MyDay do siebie" title="Ustawienia" description="Ustaw swoje imię i wybierz wygląd aplikacji." /><div className="panel settings-panel"><h2>Twój profil</h2><label className="settings-field"><span>Jak mamy się do Ciebie zwracać?</span><input value={settings.name} maxLength={32} onChange={(event) => onSave({ ...settings, name: event.target.value || 'Ty' })} placeholder="Twoje imię" /></label><div className="settings-divider" /><div className="settings-theme"><div><strong>Wygląd aplikacji</strong><span>Wybierz jasny lub ciemny motyw.</span></div><div className="theme-switcher"><button className={settings.theme === 'light' ? 'active' : ''} onClick={() => onSave({ ...settings, theme: 'light' })}><Sun size={16} /> Jasny</button><button className={settings.theme === 'dark' ? 'active' : ''} onClick={() => onSave({ ...settings, theme: 'dark' })}><Moon size={16} /> Ciemny</button></div></div></div><div className="panel data-info"><div className="data-info-icon"><Check size={19} /></div><div><strong>Twoje dane pozostają na tym urządzeniu</strong><span>Zadania, wydarzenia, ustawienia i sesje skupienia zapisujemy lokalnie w przeglądarce (localStorage).</span></div></div></section>;
+  const selected = AVATAR_IDS.includes(settings.avatar as AvatarId) ? settings.avatar as AvatarId : 'initial';
+  return <section className="inner-page"><PageTitle eyebrow="Dostosuj MyDay do siebie" title="Ustawienia" description="Ustaw swoje imię i wybierz wygląd aplikacji." /><div className="panel settings-panel"><h2>Twój profil</h2><label className="settings-field"><span>Jak mamy się do Ciebie zwracać?</span><input value={settings.name} maxLength={32} onChange={(event) => onSave({ ...settings, name: event.target.value || 'Ty' })} placeholder="Twoje imię" /></label><div className="avatar-settings"><div className="avatar-preview" data-avatar={selected} aria-label={`Wybrany avatar: ${avatarLabels[selected]}`}>{avatarContent(settings)}</div><div className="avatar-picker"><strong>Avatar</strong><span>Wybierz symbol wyświetlany przy Twoim profilu.</span><div className="avatar-options">{AVATAR_IDS.map((avatar) => <button type="button" key={avatar} className={`avatar-option ${selected === avatar ? 'active' : ''}`} data-avatar={avatar} aria-label={avatarLabels[avatar]} aria-pressed={selected === avatar} onClick={() => onSave({ ...settings, avatar })}>{avatar === 'initial' ? (settings.name.trim().charAt(0).toLocaleUpperCase('pl') || 'A') : avatarSymbols[avatar]}</button>)}</div></div></div><div className="settings-divider" /><div className="settings-theme"><div><strong>Wygląd aplikacji</strong><span>Wybierz jasny lub ciemny motyw.</span></div><div className="theme-switcher"><button className={settings.theme === 'light' ? 'active' : ''} onClick={() => onSave({ ...settings, theme: 'light' })}><Sun size={16} /> Jasny</button><button className={settings.theme === 'dark' ? 'active' : ''} onClick={() => onSave({ ...settings, theme: 'dark' })}><Moon size={16} /> Ciemny</button></div></div></div><div className="panel data-info"><div className="data-info-icon"><Check size={19} /></div><div><strong>Twoje dane pozostają na tym urządzeniu</strong><span>Zadania, wydarzenia, ustawienia i sesje skupienia zapisujemy lokalnie w przeglądarce (localStorage).</span></div></div></section>;
 }
 
 function TaskModal({ task, date, onClose, onSave }: { task: Task | null; date: string; onClose: () => void; onSave: (task: Task) => void }) {
